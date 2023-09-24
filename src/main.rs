@@ -6,7 +6,7 @@ use midir::{MidiInput, MidiInputConnection, MidiInputPort};
 use std::{
     fs::OpenOptions,
     io::Read,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock}, thread::{JoinHandle, self},
 };
 use toggle::toggle;
 fn main() -> Result<(), eframe::Error> {
@@ -20,7 +20,7 @@ fn main() -> Result<(), eframe::Error> {
     };
     {
         let binds = Arc::clone(&ctt.binds);
-
+        CELL.set(
         std::thread::spawn(move || {
             let mut midi_in =
                 MidiInput::new("midir reading input").expect("failed to find midi input");
@@ -52,7 +52,9 @@ fn main() -> Result<(), eframe::Error> {
                     )
                     .unwrap()
             };
-        });
+            thread::park();
+            // std::thread::sleep(std::time::Duration::from_secs(1000));
+        })).expect("failed to write join handle to cell");
     }
     let mut file = OpenOptions::new()
         .create(true)
@@ -83,6 +85,7 @@ struct Binding {
     pub label: String,
     pub selected: bool,
 }
+static CELL: OnceLock<JoinHandle<()>> = OnceLock::new();
 const KEYCODEMAP: phf::Map<&'static str, Keycode> = phf::phf_map! {
     "Key0" => Key0,
     "Key1" => Key1,
