@@ -1,16 +1,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 use device_query::{DeviceQuery, DeviceState, Keycode, Keycode::*};
 use eframe::egui;
-use egui::*;
 pub mod toggle;
-use midir::{Ignore, MidiInput, MidiInputPort};
+use midir::{MidiInput, MidiInputConnection, MidiInputPort};
 use std::{
-    collections::HashMap,
     fs::OpenOptions,
     io::Read,
     sync::{Arc, Mutex},
 };
-use phf::phf_map;
 use toggle::toggle;
 fn main() -> Result<(), eframe::Error> {
     env_logger::init(); // Log to stderr (if you run with `RUST_LOG=debug`).
@@ -28,11 +25,31 @@ fn main() -> Result<(), eframe::Error> {
     let mut ctt = Content {
         binds: Arc::new(Mutex::new(Vec::<Binding>::new())),
         dev_state: device_state,
-        // midi_in: midi_in,
-        // midi_in_port: ip.expect("no midi ports available").clone(),
+        mcin: Arc::new(Mutex::new(None)), // midi_in: midi_in,
+                                          // midi_in_port: ip.expect("no midi ports available").clone(),
     };
-    {
-        let mut ctt = ctt.clone();
+    {let binds = Arc::clone(&ctt.binds);
+        let conn_in = {
+            midi_in
+                .connect(
+                    ip.expect("failed to find input port"),
+                    "midir-read-input",
+                    move |stamp, message, _| {
+                        println!("{:?}", message);
+
+                        if message[0] == 154 {
+                            for i in binds.lock().unwrap().iter_mut() {
+                                if i.selected {
+                                    i.note = message[1] as u32;
+                                }
+                            }
+                        }
+                    },
+                    (),
+                )
+                .unwrap()
+        };
+        ctt.mcin = Arc::new(Mutex::new(Some(conn_in)));
         let mut file = OpenOptions::new()
             .create(true)
             .read(true)
@@ -46,22 +63,8 @@ fn main() -> Result<(), eframe::Error> {
         for t in texts {
             ctt.binds.lock().unwrap().push(Binding::from_string(t));
         }
-        let _conn_in = midi_in.connect(
-            ip.expect("failed to find input port"),
-            "midir-read-input",
-            move |stamp, message, _| {
-                if message[0] == 154 {
-                    for i in ctt.binds.lock().unwrap().iter_mut() {
-                        if i.selected {
-                            i.note = message[1] as u32;
-                        }
-                    }
-                }
-                println!("{:?}", message)
-            },
-            (),
-        );
     }
+    std::thread::spawn()
     eframe::run_native("Keyboard events", options, Box::new(|_cc| Box::new(ctt)))
 }
 
@@ -69,8 +72,8 @@ fn main() -> Result<(), eframe::Error> {
 struct Content {
     binds: Arc<Mutex<Vec<Binding>>>,
     dev_state: DeviceState,
-    // midi_in: MidiInput,
-    // midi_in_port: MidiInputPort,
+    mcin: Arc<Mutex<Option<MidiInputConnection<()>>>>, // midi_in: MidiInput,
+                                                       // midi_in_port: MidiInputPort,
 }
 #[derive(Clone)]
 struct Binding {
@@ -79,7 +82,7 @@ struct Binding {
     pub label: String,
     pub selected: bool,
 }
-const KEYCODEMAP: phf::Map <&'static str, Keycode> = phf::phf_map! {
+const KEYCODEMAP: phf::Map<&'static str, Keycode> = phf::phf_map! {
     "Key0" => Key0,
     "Key1" => Key1,
     "Key2" => Key2,
@@ -185,12 +188,14 @@ impl Binding {
         }
     }
     pub fn keycode_str(k: Keycode) -> &'static str {
-        match KEYCODEMAP.entries().find_map(|(st, ke)| if *ke == k {Some(st)} else {None}) {
-            Some(key) => { *key}
-            None => {"Key0"}
+        match KEYCODEMAP
+            .entries()
+            .find_map(|(st, ke)| if *ke == k { Some(st) } else { None })
+        {
+            Some(key) => *key,
+            None => "Key0",
         }
     }
-
     pub fn from_string(input: String) -> Binding {
         let mut v: Vec<&str> = input.split_whitespace().collect();
         let mut o = Vec::<device_query::keymap::Keycode>::new();
