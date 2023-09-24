@@ -13,58 +13,61 @@ fn main() -> Result<(), eframe::Error> {
     env_logger::init(); // Log to stderr (if you run with `RUST_LOG=debug`).
     let device_state = DeviceState::new();
     let options = eframe::NativeOptions::default();
-    let mut midi_in = MidiInput::new("midir reading input").expect("failed to find midi input");
-    let in_ports = midi_in.ports();
-    let ip: Option<&MidiInputPort> = match in_ports.len() {
-        0 => {
-            println!("no inputs found");
-            None
-        }
-        _ => Some(in_ports.get(0).expect("failed to index ports")),
-    };
+
     let mut ctt = Content {
         binds: Arc::new(Mutex::new(Vec::<Binding>::new())),
         dev_state: device_state,
-        mcin: Arc::new(Mutex::new(None)), // midi_in: midi_in,
-                                          // midi_in_port: ip.expect("no midi ports available").clone(),
     };
-    {let binds = Arc::clone(&ctt.binds);
-        let conn_in = {
-            midi_in
-                .connect(
-                    ip.expect("failed to find input port"),
-                    "midir-read-input",
-                    move |stamp, message, _| {
-                        println!("{:?}", message);
+    {
+        let binds = Arc::clone(&ctt.binds);
 
-                        if message[0] == 154 {
-                            for i in binds.lock().unwrap().iter_mut() {
-                                if i.selected {
-                                    i.note = message[1] as u32;
+        std::thread::spawn(move || {
+            let mut midi_in =
+                MidiInput::new("midir reading input").expect("failed to find midi input");
+            let in_ports = midi_in.ports();
+            let ip: Option<&MidiInputPort> = match in_ports.len() {
+                0 => {
+                    println!("no inputs found");
+                    None
+                }
+                _ => Some(in_ports.get(0).expect("failed to index ports")),
+            };
+            let conn_in = {
+                midi_in
+                    .connect(
+                        ip.expect("failed to find input port"),
+                        "midir-read-input",
+                        move |stamp, message, _| {
+                            println!("{:?}", message);
+
+                            if message[0] == 154 {
+                                for i in binds.lock().unwrap().iter_mut() {
+                                    if i.selected {
+                                        i.note = message[1] as u32;
+                                    }
                                 }
                             }
-                        }
-                    },
-                    (),
-                )
-                .unwrap()
-        };
-        ctt.mcin = Arc::new(Mutex::new(Some(conn_in)));
-        let mut file = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .open("cfg.txt")
-            .expect("failed to open file");
-        let mut sbuf = String::new();
-        file.read_to_string(&mut sbuf)
-            .expect("failed to read to string");
-        let texts: Vec<String> = sbuf.split_terminator('\n').map(|x| x.to_string()).collect();
-        for t in texts {
-            ctt.binds.lock().unwrap().push(Binding::from_string(t));
-        }
+                        },
+                        (),
+                    )
+                    .unwrap()
+            };
+        });
     }
-    std::thread::spawn()
+    let mut file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open("cfg.txt")
+        .expect("failed to open file");
+    let mut sbuf = String::new();
+    file.read_to_string(&mut sbuf)
+        .expect("failed to read to string");
+    let texts: Vec<String> = sbuf.split_terminator('\n').map(|x| x.to_string()).collect();
+    for t in texts {
+        ctt.binds.lock().unwrap().push(Binding::from_string(t));
+    }
+
     eframe::run_native("Keyboard events", options, Box::new(|_cc| Box::new(ctt)))
 }
 
@@ -72,8 +75,6 @@ fn main() -> Result<(), eframe::Error> {
 struct Content {
     binds: Arc<Mutex<Vec<Binding>>>,
     dev_state: DeviceState,
-    mcin: Arc<Mutex<Option<MidiInputConnection<()>>>>, // midi_in: MidiInput,
-                                                       // midi_in_port: MidiInputPort,
 }
 #[derive(Clone)]
 struct Binding {
