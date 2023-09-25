@@ -2,19 +2,24 @@
 use device_query::{DeviceQuery, DeviceState, Keycode, Keycode::*};
 use eframe::egui;
 pub mod toggle;
+use active_win_pos_rs::get_active_window;
 use enigo::{Enigo, Key, KeyboardControllable};
 use midir::{MidiInput, MidiInputPort};
 use std::{
     fs::OpenOptions,
-    io::Read,
+    io::{Read, Write},
     sync::{Arc, Mutex, OnceLock},
     thread::{self, JoinHandle},
 };
 use toggle::toggle;
+const ICON: &[u8] = include_bytes!("../icon.png");
 fn main() -> Result<(), eframe::Error> {
+    let options = eframe::NativeOptions {
+        icon_data: Some(eframe::IconData::try_from_png_bytes(ICON).expect("failed to find image")),
+        ..Default::default()
+    };
     env_logger::init(); // Log to stderr (if you run with `RUST_LOG=debug`).
     let device_state = DeviceState::new();
-    let options = eframe::NativeOptions::default();
 
     let ctt = Content {
         binds: Arc::new(Mutex::new(Vec::<Binding>::new())),
@@ -43,7 +48,16 @@ fn main() -> Result<(), eframe::Error> {
 
                             if message[0] == 154 {
                                 for i in binds.lock().unwrap().iter_mut() {
-                                    if i.note == message[1] {
+                                    if i.note == message[1]
+                                        && get_active_window()
+                                            .expect("failed to get window")
+                                            .app_name
+                                            .contains("Photoshop")
+                                        && !get_active_window()
+                                            .expect("failed to get window")
+                                            .app_name
+                                            .contains("Lightroom")
+                                    {
                                         for k in &i.keys {
                                             enigo.key_down(enigo_map(*k));
                                         }
@@ -77,8 +91,11 @@ fn main() -> Result<(), eframe::Error> {
     file.read_to_string(&mut sbuf)
         .expect("failed to read to string");
     let texts: Vec<String> = sbuf.split_terminator('\n').map(|x| x.to_string()).collect();
-    for t in texts {
-        ctt.binds.lock().unwrap().push(Binding::from_string(t));
+    for t in texts.iter().filter(|a| a.len() > 1) {
+        ctt.binds
+            .lock()
+            .unwrap()
+            .push(Binding::from_string(t.to_string()));
     }
 
     eframe::run_native("Keyboard events", options, Box::new(|_cc| Box::new(ctt)))
@@ -89,7 +106,25 @@ struct Content {
     binds: Arc<Mutex<Vec<Binding>>>,
     dev_state: DeviceState,
 }
-#[derive(Clone)]
+impl Content {
+    pub fn save_to_file(&self, filename: String) {
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(filename)
+            .expect("failed to open file");
+        let mut sbuf = String::new();
+
+        for b in self.binds.lock().unwrap().iter() {
+            println!("{:#?}", b);
+            sbuf += (b.to_save() + "\n").as_str();
+        }
+        sbuf.pop();
+        file.write(sbuf.as_bytes()).expect("failed to write file");
+    }
+}
+#[derive(Clone, Debug)]
 struct Binding {
     pub note: u8,
     pub keys: Vec<Keycode>,
@@ -342,18 +377,25 @@ impl Binding {
     }
     pub fn to_save(&self) -> String {
         let mut o = String::new();
+        o.push_str((self.label.to_string() + ",").as_str());
         o.push_str((self.note.to_string() + ",").as_str());
         for b in &self.keys {
-            o.push_str((Self::keycode_str(*b).to_owned() + ".").as_str());
+            o.push_str((Self::keycode_str(*b).to_owned() + ",").as_str());
         }
+
         o.pop();
         o
     }
 }
 impl eframe::App for Content {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::CentralPanel::default().show(&ctx, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| {
+        egui::TopBottomPanel::top("a").show(&ctx, |ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+                // ui.text_edit_singleline(&mut self.savefilename);
+                // ui.heading("Savefile Name:")
+                if ui.button("save").clicked() {
+                    self.save_to_file("cfg.txt".to_string());
+                }
                 if ui.button("add").clicked() {
                     let mut k = self.dev_state.get_keys();
                     k.reverse();
@@ -364,6 +406,15 @@ impl eframe::App for Content {
                         selected: false,
                     });
                 }
+            });
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
+                // ui.text_edit_singleline(&mut self.savefilename);
+                // ui.heading("Savefile Name:")
+                ui.heading("MIDI2KB")
+            });
+        });
+        egui::CentralPanel::default().show(&ctx, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| {
                 let mut i = 0;
                 while i < self.binds.lock().unwrap().len() {
                     ui.group(|ui| {

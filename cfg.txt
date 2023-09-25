@@ -1,2 +1,2 @@
-amog us,2,LControl,A
-Binding2,4,LAlt,B,O,P
+Hue,8,LAlt,F4
+Groß A,9,LShift,A
