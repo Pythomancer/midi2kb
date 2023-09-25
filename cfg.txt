@@ -1,2 +1,3 @@
 Hue,8,LAlt,F4
 Groß A,9,LShift,A
+Groß A,9,LShift,A
