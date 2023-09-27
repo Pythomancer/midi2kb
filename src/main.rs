@@ -97,7 +97,7 @@ fn main() -> Result<(), eframe::Error> {
                                 }
                                 if !steal && !matching {
                                     println!("writing, {}", appname);
-                                    mioc.send(message);
+                                    let _ = mioc.send(message);
                                 }
                             }
                         },
