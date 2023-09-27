@@ -4,7 +4,7 @@ use eframe::egui;
 pub mod toggle;
 use active_win_pos_rs::get_active_window;
 use enigo::{Enigo, Key, KeyboardControllable};
-use midir::{MidiInput, MidiInputPort};
+use midir::{MidiInput, MidiInputPort, MidiOutput};
 use std::{
     fs::OpenOptions,
     io::{Read, Write},
@@ -29,13 +29,43 @@ fn main() -> Result<(), eframe::Error> {
         let binds = Arc::clone(&ctt.binds);
         CELL.set(std::thread::spawn(move || {
             let midi_in = MidiInput::new("midir reading input").expect("failed to find midi input");
+            let midi_out =
+                MidiOutput::new("midir writing output").expect("failed to create midi output");
+            // let _mioc = midi_out
+            //     .create_virtual("midi2kb_o")
+            //     .expect("failed to create virtual out");
+            let ports = midi_out.ports();
+            let midi_out_port = ports
+                .iter()
+                .filter(|mio| {
+                    midi_out
+                        .port_name(mio)
+                        .expect("no output portname found")
+                        .contains("midi2")
+                })
+                .next()
+                .expect("no found named port");
+            let mut mioc = midi_out
+                .connect(midi_out_port, "midi2lr")
+                .expect("failed to create output");
             let in_ports = midi_in.ports();
             let ip: Option<&MidiInputPort> = match in_ports.len() {
                 0 => {
                     println!("no inputs found");
                     None
                 }
-                _ => Some(in_ports.get(0).expect("failed to index ports")),
+                _ => Some(
+                    in_ports
+                        .iter()
+                        .filter(|mi| {
+                            midi_in
+                                .port_name(mi)
+                                .expect("failed to get in name")
+                                .contains("TOUCH")
+                        })
+                        .next()
+                        .expect("no kb found"),
+                ),
             };
             let mut enigo = Enigo::new();
             let _conn_in = {
@@ -44,20 +74,15 @@ fn main() -> Result<(), eframe::Error> {
                         ip.expect("failed to find input port"),
                         "midir-read-input",
                         move |_stamp, message, _| {
-                            println!("{:?}", message);
-
+                            // println!("{:?}", message);
+                            let appname =
+                                get_active_window().expect("failed to get window").app_name;
+                            let steal =
+                                appname.contains("Photoshop") && !appname.contains("Lightroom");
+                            let matching = appname.contains("midi2kb");
                             if message[0] == 154 {
                                 for i in binds.lock().unwrap().iter_mut() {
-                                    if i.note == message[1]
-                                        && get_active_window()
-                                            .expect("failed to get window")
-                                            .app_name
-                                            .contains("Photoshop")
-                                        && !get_active_window()
-                                            .expect("failed to get window")
-                                            .app_name
-                                            .contains("Lightroom")
-                                    {
+                                    if i.note == message[1] && steal {
                                         for k in &i.keys {
                                             enigo.key_down(enigo_map(*k));
                                         }
@@ -65,10 +90,14 @@ fn main() -> Result<(), eframe::Error> {
                                             enigo.key_up(enigo_map(*k));
                                         }
                                     }
-                                    if i.selected {
+                                    if matching && i.selected {
                                         i.note = message[1];
                                         i.selected = false;
                                     }
+                                }
+                                if !steal && !matching {
+                                    println!("writing, {}", appname);
+                                    mioc.send(message);
                                 }
                             }
                         },
@@ -98,7 +127,7 @@ fn main() -> Result<(), eframe::Error> {
             .push(Binding::from_string(t.to_string()));
     }
 
-    eframe::run_native("Keyboard events", options, Box::new(|_cc| Box::new(ctt)))
+    eframe::run_native("MIDI2KB", options, Box::new(|_cc| Box::new(ctt)))
 }
 
 #[derive(Clone)]
